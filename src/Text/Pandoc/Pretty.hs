@@ -1,6 +1,9 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE CPP                        #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
 {- |
    Module      : Text.Pandoc.Pretty
    Copyright   : Copyright (C) 2010-2019 John MacFarlane
@@ -84,19 +87,19 @@ data RenderState a = RenderState{
 
 type DocState a = State (RenderState a) ()
 
-data D = Text Int String
-       | Block Int [String]
-       | Prefixed String Doc
-       | BeforeNonBlank Doc
-       | Flush Doc
-       | BreakingSpace
-       | AfterBreak String
-       | CarriageReturn
-       | NewLine
-       | BlankLines Int  -- number of blank lines
-       deriving (Show, Eq)
+data D a = Text Int a
+         | Block Int [a]
+         | Prefixed a Doc
+         | BeforeNonBlank Doc
+         | Flush Doc
+         | BreakingSpace
+         | AfterBreak a
+         | CarriageReturn
+         | NewLine
+         | BlankLines Int  -- number of blank lines
+         deriving (Show, Eq, Functor, Foldable, Traversable)
 
-newtype Doc = Doc { unDoc :: Seq D }
+newtype Doc = Doc { unDoc :: Seq (D String) }
               deriving (Semigroup, Monoid, Show, Eq)
 
 instance IsString Doc where
@@ -108,12 +111,12 @@ instance DT.TemplateTarget Doc where
   nested = nest
   isEmpty = isEmpty
 
-isBlank :: D -> Bool
+isBlank :: D a -> Bool
 isBlank BreakingSpace  = True
 isBlank CarriageReturn = True
 isBlank NewLine        = True
 isBlank (BlankLines _) = True
-isBlank (Text _ (c:_)) = isSpace c
+-- isBlank (Text _ (c:_)) = isSpace c
 isBlank _              = False
 
 -- | True if the document is empty.
@@ -237,7 +240,7 @@ data IsBlock = IsBlock Int [String]
 -- pattern VBlock i s <- mkIsBlock -> Just (IsBlock ..)
 
 renderList :: (IsString a, Monoid a)
-           => [D] -> DocState a
+           => [D String] -> DocState a
 renderList [] = return ()
 renderList (Text off s : xs) = do
   outp off s
@@ -343,7 +346,7 @@ renderList (Block _width lns : xs) = do
   modify $ \s -> s{ prefix = oldPref }
   renderList xs
 
-mergeBlocks :: Bool -> IsBlock -> IsBlock -> D
+mergeBlocks :: Bool -> IsBlock -> IsBlock -> D String
 mergeBlocks addSpace (IsBlock w1 lns1) (IsBlock w2 lns2) =
   Block (w1 + w2 + if addSpace then 1 else 0) $
      zipWith (\l1 l2 -> pad w1 l1 ++ l2) lns1' (map sp lns2')
@@ -357,7 +360,7 @@ mergeBlocks addSpace (IsBlock w1 lns1) (IsBlock w2 lns2) =
           sp "" = ""
           sp xs = if addSpace then ' ' : xs else xs
 
-offsetOf :: D -> Int
+offsetOf :: D String -> Int
 offsetOf (Text o _)    = o
 offsetOf (Block w _)   = w
 offsetOf BreakingSpace = 1
@@ -366,7 +369,7 @@ offsetOf _             = 0
 -- | A literal string.
 text :: String -> Doc
 text = Doc . toChunks
-  where toChunks :: String -> Seq D
+  where toChunks :: String -> Seq (D String)
         toChunks [] = mempty
         toChunks s = case break (=='\n') s of
                           ([], _:ys) -> NewLine <| toChunks ys
