@@ -1,5 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE CPP                        #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
@@ -69,8 +70,7 @@ import Control.Monad.State.Strict
 import Data.Char (isSpace)
 import Data.Foldable (toList)
 import Data.List (intersperse, foldl')
-import Data.Sequence (Seq, ViewL (..), fromList, mapWithIndex, singleton, viewl,
-                      (<|))
+import Data.Sequence (Seq, ViewL (..), fromList, singleton, viewl, (<|))
 import qualified Data.Sequence as Seq
 import Data.String
 import qualified Text.DocTemplates as DT
@@ -89,27 +89,45 @@ type DocState a = State (RenderState a) ()
 
 data D a = Text Int a
          | Block Int [a]
-         | Prefixed a Doc
-         | BeforeNonBlank Doc
-         | Flush Doc
+         | Prefixed String (D a)
+         | BeforeNonBlank (D a)
+         | Flush (D a)
          | BreakingSpace
          | AfterBreak a
          | CarriageReturn
          | NewLine
          | BlankLines Int  -- number of blank lines
+         | Concat (D a) (D a)
+         | Empty
          deriving (Show, Eq, Functor, Foldable, Traversable)
 
-newtype Doc = Doc { unDoc :: Seq (D String) }
-              deriving (Semigroup, Monoid, Show, Eq)
+instance Semigroup (D a) where
+  x <> Empty = x
+  Empty <> x = x
+  x <> y     = Concat x y
 
-instance IsString Doc where
+instance Monoid (D a) where
+  mappend = (<>)
+  mempty = Empty
+
+type Doc = D String
+-- newtype Doc = Doc { unDoc :: Seq (D String) }
+--              deriving (Semigroup, Monoid, Show, Eq)
+
+instance IsString a => IsString (D a) where
   fromString = text
 
-instance DT.TemplateTarget Doc where
+instance DT.TemplateTarget (D String) where
   fromText = text . T.unpack
   removeFinalNewline = id
   nested = nest
   isEmpty = isEmpty
+
+unfoldD :: D a -> [D a]
+unfoldD Empty = []
+unfoldD (Concat x@(Concat{}) y) = unfoldD x <> unfoldD y
+unfoldD (Concat x y)            = x : unfoldD y
+unfoldD x                       = [x]
 
 isBlank :: D a -> Bool
 isBlank BreakingSpace  = True
@@ -121,7 +139,8 @@ isBlank _              = False
 
 -- | True if the document is empty.
 isEmpty :: Doc -> Bool
-isEmpty = Seq.null . unDoc
+isEmpty Empty = True
+isEmpty _     = False
 
 -- | The empty document.
 empty :: Doc
@@ -174,25 +193,31 @@ vsep :: [Doc] -> Doc
 vsep = foldr ($+$) empty
 
 -- | Removes leading blank lines from a 'Doc'.
-nestle :: Doc -> Doc
-nestle (Doc d) = Doc $ go d
-  where go x = case viewl x of
-               (BlankLines _ :< rest) -> go rest
-               (NewLine :< rest)      -> go rest
-               _                      -> x
+nestle :: D a -> D a
+nestle d =
+  case d of
+    BlankLines _              -> Empty
+    NewLine                   -> Empty
+    Concat (Concat x y) z     -> nestle (Concat x (Concat y z))
+    Concat BlankLines{} x     -> nestle x
+    Concat NewLine x          -> nestle x
+    _                         -> d
 
 -- | Chomps trailing blank space off of a 'Doc'.
-chomp :: Doc -> Doc
-chomp d = Doc (fromList dl')
-  where dl = toList (unDoc d)
-        dl' = reverse $ go $ reverse dl
-        go []                    = []
-        go (BreakingSpace : xs)  = go xs
-        go (CarriageReturn : xs) = go xs
-        go (NewLine : xs)        = go xs
-        go (BlankLines _ : xs)   = go xs
-        go (Prefixed s d' : xs)  = Prefixed s (chomp d') : xs
-        go xs                    = xs
+chomp :: D a -> D a
+chomp d =
+    case d of
+    BlankLines _              -> Empty
+    NewLine                   -> Empty
+    CarriageReturn            -> Empty
+    BreakingSpace             -> Empty
+    Prefixed s d'             -> Prefixed s (chomp d')
+    Concat (Concat x y) z     -> chomp (Concat x (Concat y z))
+    Concat x y                ->
+        case chomp y of
+          Empty -> chomp x
+          z     -> x <> z
+    _                         -> d
 
 outp :: (IsString a) => Int -> String -> DocState a
 outp off s | off < 0 = do  -- offset < 0 means newline characters
@@ -232,7 +257,7 @@ render linelen doc = fromString . mconcat . reverse . output $
 
 renderDoc :: (IsString a, Monoid a)
           => Doc -> DocState a
-renderDoc = renderList . dropWhile (== BreakingSpace) . toList . unDoc
+renderDoc = renderList . dropWhile (== BreakingSpace) . unfoldD
 
 data IsBlock = IsBlock Int [String]
 
@@ -367,104 +392,102 @@ offsetOf BreakingSpace = 1
 offsetOf _             = 0
 
 -- | A literal string.
-text :: String -> Doc
-text = Doc . toChunks
-  where toChunks :: String -> Seq (D String)
-        toChunks [] = mempty
-        toChunks s = case break (=='\n') s of
-                          ([], _:ys) -> NewLine <| toChunks ys
-                          (xs, _:ys) -> Text (realLength xs) xs <|
-                                            (NewLine <| toChunks ys)
-                          (xs, [])      -> singleton $ Text (realLength xs) xs
+text :: IsString a => String -> D a
+text [] = mempty
+text s = case break (=='\n') s of
+           ([], _:ys) -> NewLine <> text ys
+           (xs, _:ys) -> Text (realLength xs) (fromString xs) <>
+                             (NewLine <> text ys)
+           (xs, [])   -> Text (realLength xs) (fromString xs)
 
 -- | A character.
-char :: Char -> Doc
+char :: IsString a => Char -> D a
 char c = text [c]
 
 -- | A breaking (reflowable) space.
-space :: Doc
-space = Doc $ singleton BreakingSpace
+space :: D a
+space = BreakingSpace
 
 -- | A carriage return.  Does nothing if we're at the beginning of
 -- a line; otherwise inserts a newline.
-cr :: Doc
-cr = Doc $ singleton CarriageReturn
+cr :: D a
+cr = CarriageReturn
 
 -- | Inserts a blank line unless one exists already.
 -- (@blankline <> blankline@ has the same effect as @blankline@.
-blankline :: Doc
-blankline = Doc $ singleton (BlankLines 1)
+blankline :: D a
+blankline = BlankLines 1
 
 -- | Inserts blank lines unless they exist already.
 -- (@blanklines m <> blanklines n@ has the same effect as @blanklines (max m n)@.
-blanklines :: Int -> Doc
-blanklines n = Doc $ singleton (BlankLines n)
+blanklines :: Int -> D a
+blanklines n = BlankLines n
 
 -- | Uses the specified string as a prefix for every line of
 -- the inside document (except the first, if not at the beginning
 -- of the line).
-prefixed :: String -> Doc -> Doc
-prefixed pref doc = Doc $ singleton $ Prefixed pref doc
+prefixed :: String -> D a -> D a
+prefixed pref doc = Prefixed pref doc
 
 -- | Makes a 'Doc' flush against the left margin.
-flush :: Doc -> Doc
-flush doc = Doc $ singleton $ Flush doc
+flush :: D a -> D a
+flush doc = Flush doc
 
 -- | Indents a 'Doc' by the specified number of spaces.
-nest :: Int -> Doc -> Doc
+nest :: Int -> D a -> D a
 nest ind = prefixed (replicate ind ' ')
 
 -- | A hanging indent. @hang ind start doc@ prints @start@,
 -- then @doc@, leaving an indent of @ind@ spaces on every
 -- line but the first.
-hang :: Int -> Doc -> Doc -> Doc
+hang :: Int -> D a -> D a -> D a
 hang ind start doc = start <> nest ind doc
 
 -- | @beforeNonBlank d@ conditionally includes @d@ unless it is
 -- followed by blank space.
-beforeNonBlank :: Doc -> Doc
-beforeNonBlank d = Doc $ singleton (BeforeNonBlank d)
+beforeNonBlank :: D a -> D a
+beforeNonBlank d = BeforeNonBlank d
 
 -- | Makes a 'Doc' non-reflowable.
-nowrap :: Doc -> Doc
-nowrap doc = Doc $ mapWithIndex replaceSpace $ unDoc doc
-  where replaceSpace _ BreakingSpace = Text 1 " "
-        replaceSpace _ x             = x
+nowrap :: IsString a => D a -> D a
+nowrap doc = mconcat . map replaceSpace . unfoldD $ doc
+  where replaceSpace BreakingSpace = Text 1 $ fromString " "
+        replaceSpace x             = x
 
 -- | Content to print only if it comes at the beginning of a line,
 -- to be used e.g. for escaping line-initial `.` in roff man.
-afterBreak :: String -> Doc
-afterBreak s = Doc $ singleton (AfterBreak s)
+afterBreak :: a -> D a
+afterBreak d = AfterBreak d
 
 -- | Returns the width of a 'Doc'.
-offset :: Doc -> Int
+offset :: D String -> Int
 offset d = maximum (0: map realLength (lines $ render Nothing d))
 
 -- | Returns the minimal width of a 'Doc' when reflowed at breakable spaces.
-minOffset :: Doc -> Int
+minOffset :: D String -> Int
 minOffset d = maximum (0: map realLength (lines $ render (Just 0) d))
 
 -- | @lblock n d@ is a block of width @n@ characters, with
 -- text derived from @d@ and aligned to the left.
-lblock :: Int -> Doc -> Doc
+lblock :: Int -> D String -> D String
 lblock = block id
 
 -- | Like 'lblock' but aligned to the right.
-rblock :: Int -> Doc -> Doc
-rblock w = block (\s -> replicate (w - realLength s) ' ' ++ s) w
+rblock :: Int -> D String -> D String
+rblock w = block (\s -> replicate (w - realLength s) ' ' <> s) w
 
 -- | Like 'lblock' but aligned centered.
-cblock :: Int -> Doc -> Doc
-cblock w = block (\s -> replicate ((w - realLength s) `div` 2) ' ' ++ s) w
+cblock :: Int -> D String -> D String
+cblock w = block (\s -> replicate ((w - realLength s) `div` 2) ' ' <> s) w
 
 -- | Returns the height of a block or other 'Doc'.
-height :: Doc -> Int
+height :: D String -> Int
 height = length . lines . render Nothing
 
-block :: (String -> String) -> Int -> Doc -> Doc
+block :: (String -> String) -> Int -> D String -> D String
 block filler width d
   | width < 1 && not (isEmpty d) = block filler 1 d
-  | otherwise                    = Doc $ singleton $ Block width $ map filler
+  | otherwise                    = Block width $ map filler
                                  $ chop width $ render (Just width) d
 
 chop :: Int -> String -> [String]
@@ -479,28 +502,28 @@ chop n cs = case break (=='\n') cs of
                                    where len = realLength xs
 
 -- | Encloses a 'Doc' inside a start and end 'Doc'.
-inside :: Doc -> Doc -> Doc -> Doc
+inside :: D a -> D a -> D a -> D a
 inside start end contents =
   start <> contents <> end
 
 -- | Puts a 'Doc' in curly braces.
-braces :: Doc -> Doc
+braces :: IsString a => D a -> D a
 braces = inside (char '{') (char '}')
 
 -- | Puts a 'Doc' in square brackets.
-brackets :: Doc -> Doc
+brackets :: IsString a => D a -> D a
 brackets = inside (char '[') (char ']')
 
 -- | Puts a 'Doc' in parentheses.
-parens :: Doc -> Doc
+parens :: IsString a => D a -> D a
 parens = inside (char '(') (char ')')
 
 -- | Wraps a 'Doc' in single quotes.
-quotes :: Doc -> Doc
+quotes :: IsString a => D a -> D a
 quotes = inside (char '\'') (char '\'')
 
 -- | Wraps a 'Doc' in double quotes.
-doubleQuotes :: Doc -> Doc
+doubleQuotes :: IsString a => D a -> D a
 doubleQuotes = inside (char '"') (char '"')
 
 -- | Returns width of a character in a monospace font:  0 for a combining
