@@ -27,7 +27,7 @@ module Text.Pandoc.Templates ( Template
 import Prelude
 import System.FilePath ((<.>), (</>))
 import Text.DocTemplates (Template, compileTemplate, renderTemplate, Context(..),
-                         Val(..), TemplateTarget(..))
+                         FromContext(..), Val(..), TemplateTarget(..))
 import Text.Pandoc.Class (PandocMonad, readDataFile)
 import qualified Text.Pandoc.UTF8 as UTF8
 import Data.Text (Text)
@@ -127,13 +127,12 @@ metaValueToVal blockWriter _ (MetaBlocks bs) = SimpleVal <$> blockWriter bs
 metaValueToVal _ inlineWriter (MetaInlines is) = SimpleVal <$> inlineWriter is
 
 -- | Retrieve a field value from a Context.
-getField :: String
+getField :: FromContext a b
+         => String
          -> Context a
-         -> Maybe a
+         -> Maybe b
 getField field (Context hashmap) =
-  case M.lookup (T.pack field) hashmap of
-    Just (SimpleVal x) -> Just x
-    _                  -> Nothing
+  M.lookup (T.pack field) hashmap >>= fromVal
 
 -- | Set a field of a Context.  If the field already has a value,
 -- convert it into a list with the new value appended to the old value(s).

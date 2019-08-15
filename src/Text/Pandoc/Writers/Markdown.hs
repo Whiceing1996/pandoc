@@ -26,7 +26,7 @@ import qualified Data.HashMap.Strict as H
 import Data.List (find, group, intersperse, sortBy, stripPrefix, transpose,
                   isPrefixOf)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, catMaybes)
 import Data.Ord (comparing)
 import qualified Data.Set as Set
 import qualified Data.Scientific as Scientific
@@ -43,11 +43,13 @@ import Text.Pandoc.Options
 import Text.Pandoc.Parsing hiding (blankline, blanklines, char, space)
 import Text.Pandoc.Pretty
 import Text.Pandoc.Shared
-import Text.Pandoc.Templates (renderTemplate)
+import Text.Pandoc.Templates (renderTemplate, setField, defField, resetField,
+                             getField, metaToContext)
+import Text.DocTemplates (Val(..), Context(..), FromContext(..))
 import Text.Pandoc.Walk
 import Text.Pandoc.Writers.HTML (writeHtml5String)
 import Text.Pandoc.Writers.Math (texMathToInlines)
-import Text.Pandoc.Writers.Shared
+import Text.Pandoc.Writers.Shared hiding (setField, defField, resetField, getField)
 import Text.Pandoc.XML (toHtml5Entities)
 
 type Notes = [[Block]]
@@ -115,25 +117,24 @@ pandocTitleBlock tit auths dat =
   hang 2 (text "% ") (vcat $ map nowrap auths) <> cr <>
   hang 2 (text "% ") dat <> cr
 
-mmdTitleBlock :: Value -> Doc
-mmdTitleBlock (Object hashmap) =
-  vcat $ map go $ sortBy (comparing fst) $ H.toList hashmap
+mmdTitleBlock :: Context Doc -> Doc
+mmdTitleBlock (Context hashmap) =
+  vcat $ map go $ sortBy (comparing fst) $ M.toList hashmap
   where go (k,v) =
           case (text (T.unpack k), v) of
-               (k', Array vec)
-                 | V.null vec     -> empty
+               (k', ListVal xs)
+                 | null xs        -> empty
                  | otherwise      -> k' <> ":" <> space <>
-                                      hcat (intersperse "; "
-                                           (map fromstr $ V.toList vec))
-               (_, String "")  -> empty
-               (k', x)         -> k' <> ":" <> space <> nest 2 (fromstr x)
-        fromstr (String s) = text (removeBlankLines $ T.unpack s)
-        fromstr (Bool b)   = text (show b)
-        fromstr (Number n) = text (show n)
-        fromstr _          = empty
+                                      hcat (intersperse "; " $
+                                          catMaybes $ map fromVal xs)
+               (k', SimpleVal x)
+                      | isEmpty x -> empty
+                      | otherwise -> k' <> ":" <> space <> nest 2 x
+        -- TODO:
+        removeBlankLines = id
         -- blank lines not allowed in MMD metadata - we replace with .
-        removeBlankLines   = trimr . unlines . map (\x ->
-                               if all isSpace x then "." else x) . lines
+        -- removeBlankLines   = trimr . unlines . map (\x ->
+        --                        if all isSpace x then "." else x) . lines
 mmdTitleBlock _ = empty
 
 plainTitleBlock :: Doc -> [Doc] -> Doc -> Doc
@@ -142,35 +143,39 @@ plainTitleBlock tit auths dat =
   (hcat (intersperse (text "; ") auths)) <> cr <>
   dat <> cr
 
-yamlMetadataBlock :: Value -> Doc
-yamlMetadataBlock v = "---" $$ (jsonToYaml v) $$ "---"
+yamlMetadataBlock :: Context Doc -> Doc
+yamlMetadataBlock v = "---" $$ (contextToYaml v) $$ "---"
 
-jsonToYaml :: Value -> Doc
-jsonToYaml (Object hashmap) =
-  vcat $ map (\(k,v) ->
-          case (text (T.unpack k), v, jsonToYaml v) of
-               (k', Array vec, x)
-                 | V.null vec     -> empty
-                 | otherwise      -> (k' <> ":") $$ x
-               (k', Object hm, x)
-                 | H.null hm      -> k' <> ": {}"
-                 | otherwise      -> (k' <> ":") $$ nest 2 x
-               (_, String "", _)  -> empty
-               (k', _, x)         -> k' <> ":" <> space <> hang 2 "" x)
-       $ sortBy (comparing fst) $ H.toList hashmap
-jsonToYaml (Array vec) =
-  vcat $ map (\v -> hang 2 "- " (jsonToYaml v)) $ V.toList vec
-jsonToYaml (String "") = empty
-jsonToYaml (String s) =
-  case T.unpack s of
-     x | '\n' `elem` x -> hang 2 ("|" <> cr) $ text x
-       | not (any isPunctuation x) -> text x
-       | otherwise     -> text $ "'" ++ substitute "'" "''" x ++ "'"
-jsonToYaml (Bool b) = text $ show b
-jsonToYaml (Number n)
-  | Scientific.isInteger n = text $ show (floor n :: Integer)
-  | otherwise              = text $ show n
-jsonToYaml _ = empty
+contextToYaml :: Context Doc -> Doc
+contextToYaml (Context o) =
+  vcat $ map keyvalToYaml $ sortBy (comparing fst) $ M.toList o
+ where
+  keyvalToYaml (k,v) =
+          case (text (T.unpack k), v) of
+               (k', ListVal vs)
+                 | null vs        -> empty
+                 | otherwise      -> (k' <> ":") $$ valToYaml v
+               (k', MapVal (Context m))
+                 | M.null m       -> k' <> ": {}"
+                 | otherwise      -> (k' <> ":") $$ nest 2 (valToYaml v)
+               (_, SimpleVal x)
+                     | isEmpty x  -> empty
+               (_, NullVal)       -> empty
+               (k', _)            -> k' <> ":" <> space <> hang 2 "" (valToYaml v)
+
+valToYaml :: Val Doc -> Doc
+valToYaml (ListVal xs) =
+  vcat $ map (\v -> hang 2 "- " (valToYaml v)) xs
+valToYaml (MapVal c) = contextToYaml c
+valToYaml (SimpleVal x)
+  | isEmpty x = empty
+  | otherwise = hang 2 ("|" <> cr) x
+-- TODO do better
+-- case T.unpack s of
+--    x | '\n' `elem` x -> hang 2 ("|" <> cr) x
+--      | not (any isPunctuation (render Nothing x)) -> x
+--      | otherwise     -> text $ "'" ++ substitute "'" "''" x ++ "'"
+valToYaml _ = empty
 
 -- | Return markdown representation of document.
 pandocToMarkdown :: PandocMonad m => WriterOptions -> Pandoc -> MD m Text
@@ -179,15 +184,15 @@ pandocToMarkdown opts (Pandoc meta blocks) = do
                     then Just $ writerColumns opts
                     else Nothing
   isPlain <- asks envPlain
-  let render' :: Doc -> Text
-      render' = render colwidth . chomp
-  metadata <- metaToJSON'
-               (fmap render' . blockListToMarkdown opts)
-               (fmap render' . blockToMarkdown opts . Plain)
+  metadata <- metaToContext
+               -- set template because if Nothing, metaToContext does nothing
+               opts{ writerTemplate = Just $ fromMaybe mempty $ writerTemplate opts }
+               (blockListToMarkdown opts)
+               (blockToMarkdown opts . Plain)
                meta
-  let title' = maybe empty text $ getField "title" metadata
-  let authors' = maybe [] (map text) $ getField "author" metadata
-  let date' = maybe empty text $ getField "date" metadata
+  let title' = maybe empty id $ getField "title" metadata
+  let authors' = maybe [] id $ getField "author" metadata
+  let date' = maybe empty id $ getField "date" metadata
   let titleblock = case writerTemplate opts of
                         Just _ | isPlain ->
                                  plainTitleBlock title' authors' date'
@@ -201,9 +206,8 @@ pandocToMarkdown opts (Pandoc meta blocks) = do
                         Nothing -> empty
   let headerBlocks = filter isHeaderBlock blocks
   toc <- if writerTableOfContents opts
-         then render' <$> blockToMarkdown opts
-                            ( toTableOfContents opts headerBlocks )
-         else return ""
+         then blockToMarkdown opts ( toTableOfContents opts headerBlocks )
+         else return mempty
   -- Strip off final 'references' header if markdown citations enabled
   let blocks' = if isEnabled Ext_citations opts
                    then case reverse blocks of
@@ -212,7 +216,7 @@ pandocToMarkdown opts (Pandoc meta blocks) = do
                    else blocks
   body <- blockListToMarkdown opts blocks'
   notesAndRefs' <- notesAndRefs opts
-  let main = render' $ body <> notesAndRefs'
+  let main = body <> notesAndRefs'
   let context  = -- for backwards compatibility we populate toc
                  -- with the contents of the toc, rather than a
                  -- boolean:
@@ -221,9 +225,9 @@ pandocToMarkdown opts (Pandoc meta blocks) = do
                $ defField "body" main
                $ (if isNullMeta meta
                      then id
-                     else defField "titleblock" (render' titleblock))
-               $ addVariablesToJSON opts metadata
-  return $
+                     else defField "titleblock" titleblock)
+               $ metadata
+  return $ render colwidth $
     case writerTemplate opts of
        Nothing  -> main
        Just tpl -> renderTemplate tpl context
