@@ -18,6 +18,7 @@ module Text.Pandoc.Templates ( Template
                              , getDefaultTemplate
                              , metaToContext
                              , metaToContext'
+                             , addVariablesToContext
                              , defField
                              , setField
                              , getField

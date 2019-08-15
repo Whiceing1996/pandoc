@@ -44,7 +44,7 @@ import Text.Pandoc.Parsing hiding (blankline, blanklines, char, space)
 import Text.Pandoc.Pretty
 import Text.Pandoc.Shared
 import Text.Pandoc.Templates (renderTemplate, setField, defField, resetField,
-                             getField, metaToContext)
+                             getField, metaToContext', addVariablesToContext)
 import Text.DocTemplates (Val(..), Context(..), FromContext(..))
 import Text.Pandoc.Walk
 import Text.Pandoc.Writers.HTML (writeHtml5String)
@@ -184,9 +184,7 @@ pandocToMarkdown opts (Pandoc meta blocks) = do
                     then Just $ writerColumns opts
                     else Nothing
   isPlain <- asks envPlain
-  metadata <- metaToContext
-               -- set template because if Nothing, metaToContext does nothing
-               opts{ writerTemplate = Just $ fromMaybe mempty $ writerTemplate opts }
+  metadata <- metaToContext'
                (blockListToMarkdown opts)
                (blockToMarkdown opts . Plain)
                meta
@@ -226,7 +224,7 @@ pandocToMarkdown opts (Pandoc meta blocks) = do
                $ (if isNullMeta meta
                      then id
                      else defField "titleblock" titleblock)
-               $ metadata
+               $ addVariablesToContext opts metadata
   return $ render colwidth $
     case writerTemplate opts of
        Nothing  -> main
