@@ -27,7 +27,7 @@ import Text.Pandoc.Options
 import Text.Pandoc.Pretty
 import Text.Pandoc.Shared
 import Text.Pandoc.Walk (walk)
-import Text.Pandoc.Templates
+import Text.Pandoc.Templates (renderTemplate)
 import Text.Pandoc.Writers.Math
 import Text.Pandoc.Writers.Shared
 import Text.Pandoc.Writers.Roff
