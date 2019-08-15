@@ -70,6 +70,8 @@ import Data.Sequence (Seq, ViewL (..), fromList, mapWithIndex, singleton, viewl,
                       (<|))
 import qualified Data.Sequence as Seq
 import Data.String
+import qualified Text.DocTemplates as DT
+import qualified Data.Text as T
 
 data RenderState a = RenderState{
          output     :: [a]        -- ^ In reverse order
@@ -99,6 +101,12 @@ newtype Doc = Doc { unDoc :: Seq D }
 
 instance IsString Doc where
   fromString = text
+
+instance DT.TemplateTarget Doc where
+  fromText = text . T.unpack
+  removeFinalNewline = id
+  nested = nest
+  isEmpty = isEmpty
 
 isBlank :: D -> Bool
 isBlank BreakingSpace  = True
