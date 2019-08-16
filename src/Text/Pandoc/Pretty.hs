@@ -20,7 +20,8 @@ including wrapped text, indentated blocks, and tables.
 -}
 
 module Text.Pandoc.Pretty (
-       Doc
+       Doc(..)
+     , HasChars(..)
      , render
      , cr
      , blankline
@@ -66,6 +67,7 @@ module Text.Pandoc.Pretty (
 
 where
 import Prelude
+import Safe (lastMay, initSafe)
 import Control.Monad
 import Control.Monad.State.Strict
 import Data.Char (isSpace)
@@ -75,49 +77,65 @@ import qualified Data.Text as T
 import Data.Text (Text)
 import qualified Text.DocTemplates as DT
 
-data D a = Text Int a
+-- | Class abstracting over various string types that
+-- can fold over characters.
+class (IsString a, Monoid a) => HasChars a where
+  foldrChar     :: (Char -> b -> b) -> b -> a -> b
+  splitLines    :: a -> [a]
+  replicateChar :: Int -> Char -> a
+  isNull        :: a -> Bool
+
+instance HasChars Text where
+  foldrChar         = T.foldr
+  splitLines        = T.splitOn "\n"
+  replicateChar n c = T.replicate n (T.singleton c)
+  isNull            = T.null
+
+instance HasChars String where
+  foldrChar     = foldr
+  splitLines    = lines . (++"\n")
+  replicateChar = replicate
+  isNull        = null
+
+data Doc a = Text Int a
          | Block Int [a]
-         | Prefixed Text (D a)
-         | BeforeNonBlank (D a)
-         | Flush (D a)
+         | Prefixed Text (Doc a)
+         | BeforeNonBlank (Doc a)
+         | Flush (Doc a)
          | BreakingSpace
          | AfterBreak Text
          | CarriageReturn
          | NewLine
          | BlankLines Int  -- number of blank lines
-         | Concat (D a) (D a)
+         | Concat (Doc a) (Doc a)
          | Empty
          deriving (Show, Eq, Functor, Foldable, Traversable)
 
-instance Semigroup (D a) where
+instance Semigroup (Doc a) where
   x <> Empty = x
   Empty <> x = x
   x <> y     = Concat x y
 
-instance Monoid (D a) where
+instance Monoid (Doc a) where
   mappend = (<>)
   mempty = Empty
 
-type Doc = D Text
--- newtype Doc = Doc { unDoc :: Seq (D String) }
---              deriving (Semigroup, Monoid, Show, Eq)
-
-instance IsString a => IsString (D a) where
+instance IsString a => IsString (Doc a) where
   fromString = text
 
-instance DT.TemplateTarget (D Text) where
+instance IsString a => DT.TemplateTarget (Doc a) where
   fromText = text . T.unpack
   removeFinalNewline = chomp
   nested = nest
   isEmpty = isEmpty
 
-unfoldD :: D a -> [D a]
+unfoldD :: Doc a -> [Doc a]
 unfoldD Empty = []
 unfoldD (Concat x@(Concat{}) y) = unfoldD x <> unfoldD y
 unfoldD (Concat x y)            = x : unfoldD y
 unfoldD x                       = [x]
 
-isBlank :: D a -> Bool
+isBlank :: Doc a -> Bool
 isBlank BreakingSpace  = True
 isBlank CarriageReturn = True
 isBlank NewLine        = True
@@ -126,26 +144,26 @@ isBlank (BlankLines _) = True
 isBlank _              = False
 
 -- | True if the document is empty.
-isEmpty :: Doc -> Bool
+isEmpty :: Doc a -> Bool
 isEmpty Empty = True
 isEmpty _     = False
 
 -- | The empty document.
-empty :: Doc
+empty :: Doc a
 empty = mempty
 
 -- | Concatenate a list of 'Doc's.
-cat :: [Doc] -> Doc
+cat :: [Doc a] -> Doc a
 cat = mconcat
 
 -- | Same as 'cat'.
-hcat :: [Doc] -> Doc
+hcat :: [Doc a] -> Doc a
 hcat = mconcat
 
--- | Concatenate a list of 'Doc's, putting breakable spaces
+-- | Concatenate a list of 'D's, putting breakable spaces
 -- between them.
 infixr 6 <+>
-(<+>) :: Doc -> Doc -> Doc
+(<+>) :: Doc a -> Doc a -> Doc a
 (<+>) x y
   | isEmpty x = y
   | isEmpty y = x
@@ -153,12 +171,12 @@ infixr 6 <+>
 
 -- | Same as 'cat', but putting breakable spaces between the
 -- 'Doc's.
-hsep :: [Doc] -> Doc
+hsep :: [Doc a] -> Doc a
 hsep = foldr (<+>) empty
 
 infixr 5 $$
 -- | @a $$ b@ puts @a@ above @b@.
-($$) :: Doc -> Doc -> Doc
+($$) :: Doc a -> Doc a -> Doc a
 ($$) x y
   | isEmpty x = y
   | isEmpty y = x
@@ -166,22 +184,22 @@ infixr 5 $$
 
 infixr 5 $+$
 -- | @a $+$ b@ puts @a@ above @b@, with a blank line between.
-($+$) :: Doc -> Doc -> Doc
+($+$) :: Doc a -> Doc a -> Doc a
 ($+$) x y
   | isEmpty x = y
   | isEmpty y = x
   | otherwise = x <> blankline <> y
 
 -- | List version of '$$'.
-vcat :: [Doc] -> Doc
+vcat :: [Doc a] -> Doc a
 vcat = foldr ($$) empty
 
 -- | List version of '$+$'.
-vsep :: [Doc] -> Doc
+vsep :: [Doc a] -> Doc a
 vsep = foldr ($+$) empty
 
 -- | Removes leading blank lines from a 'Doc'.
-nestle :: D a -> D a
+nestle :: Doc a -> Doc a
 nestle d =
   case d of
     BlankLines _              -> Empty
@@ -192,7 +210,7 @@ nestle d =
     _                         -> d
 
 -- | Chomps trailing blank space off of a 'Doc'.
-chomp :: D a -> D a
+chomp :: Doc a -> Doc a
 chomp d =
     case d of
     BlankLines _              -> Empty
@@ -218,7 +236,7 @@ data RenderState a = RenderState{
        , newlines   :: Int        -- ^ Number of preceding newlines
        }
 
-outp :: Int -> Text -> DocState Text
+outp :: HasChars a => Int -> a -> DocState a
 outp off s | off < 0 = do  -- offset < 0 means newline characters
   st' <- get
   let rawpref = prefix st'
@@ -232,7 +250,7 @@ outp off s | off < 0 = do  -- offset < 0 means newline characters
 outp off s = do           -- offset >= 0 (0 might be combining char)
   st' <- get
   let pref = fromString $ T.unpack $ prefix st'
-  when (column st' == 0 && usePrefix st' && not (T.null pref)) $
+  when (column st' == 0 && usePrefix st' && not (isNull pref)) $
     modify $ \st -> st{ output = pref : output st
                     , column = column st + realLength pref }
   modify $ \st -> st{ output = s : output st
@@ -242,7 +260,7 @@ outp off s = do           -- offset >= 0 (0 might be combining char)
 -- | Renders a 'Doc'.  @render (Just n)@ will use
 -- a line length of @n@ to reflow text on breakable spaces.
 -- @render Nothing@ will not reflow text.
-render :: Maybe Int -> D Text -> Text
+render :: HasChars a => Maybe Int -> Doc a -> a
 render linelen doc = mconcat . reverse . output $
   execState (renderDoc doc) startingState
    where startingState = RenderState{
@@ -253,19 +271,19 @@ render linelen doc = mconcat . reverse . output $
                           , column = 0
                           , newlines = 2 }
 
-renderDoc :: D Text -> DocState Text
+renderDoc :: HasChars a => Doc a -> DocState a
 renderDoc = renderList . dropWhile isBreakingSpace . unfoldD
  where
    isBreakingSpace BreakingSpace = True
    isBreakingSpace _             = False
 
 
-data IsBlock = IsBlock Int [Text]
+data IsBlock a = IsBlock Int [a]
 
 -- This would be nicer with a pattern synonym
 -- pattern VBlock i s <- mkIsBlock -> Just (IsBlock ..)
 
-renderList :: [D Text] -> DocState Text
+renderList :: HasChars a => [Doc a] -> DocState a
 renderList [] = return ()
 
 renderList (Concat{} : xs) = renderList xs -- should not happen after unfoldD
@@ -379,160 +397,175 @@ renderList (Block _width lns : xs) = do
   modify $ \s -> s{ prefix = oldPref }
   renderList xs
 
-mergeBlocks :: Bool -> IsBlock -> IsBlock -> D Text
+mergeBlocks :: HasChars a => Bool -> IsBlock a -> IsBlock a -> Doc a
 mergeBlocks addSpace (IsBlock w1 lns1) (IsBlock w2 lns2) =
   Block (w1 + w2 + if addSpace then 1 else 0) $
      zipWith (\l1 l2 -> pad w1 l1 <> l2) lns1' (map sp lns2')
     where (lns1', lns2') = case (length lns1, length lns2) of
                                 (x, y) | x > y -> (lns1,
-                                                   lns2 ++ replicate (x - y) "")
-                                       | x < y -> (lns1 ++ replicate (y - x) "",
+                                                   lns2 ++ replicate (x - y)
+                                                            mempty)
+                                       | x < y -> (lns1 ++ replicate (y - x)
+                                                            mempty ,
                                                    lns2)
                                        | otherwise -> (lns1, lns2)
-          pad n s = s <> T.replicate (n - realLength s) " "
-          sp "" = ""
-          sp xs = if addSpace then (" " <> xs) else xs
+          pad n s = s <> replicateChar (n - realLength s) ' '
+          sp xs = if addSpace && realLength xs > 0
+                     then " " <> xs
+                     else xs
 
-offsetOf :: D a -> Int
+offsetOf :: Doc a -> Int
 offsetOf (Text o _)    = o
 offsetOf (Block w _)   = w
 offsetOf BreakingSpace = 1
 offsetOf _             = 0
 
 -- | A literal string.
-text :: IsString a => String -> D a
+text :: IsString a => String -> Doc a
 text "" = mempty
 text s = case break (=='\n') s of
            ("", "")   -> Empty
-           (xs, "")   -> Text (realLength' xs) (fromString xs)
+           (xs, "")   -> Text (realLength xs) (fromString xs)
            ("", _:ys) -> NewLine <> text ys
-           (xs, _:ys) -> Text (realLength' xs) (fromString xs) <>
+           (xs, _:ys) -> Text (realLength xs) (fromString xs) <>
                            NewLine <> text ys
 
 -- | A character.
-char :: IsString a => Char -> D a
+char :: IsString a => Char -> Doc a
 char c = text $ fromString [c]
 
 -- | A breaking (reflowable) space.
-space :: D a
+space :: Doc a
 space = BreakingSpace
 
 -- | A carriage return.  Does nothing if we're at the beginning of
 -- a line; otherwise inserts a newline.
-cr :: D a
+cr :: Doc a
 cr = CarriageReturn
 
 -- | Inserts a blank line unless one exists already.
 -- (@blankline <> blankline@ has the same effect as @blankline@.
-blankline :: D a
+blankline :: Doc a
 blankline = BlankLines 1
 
 -- | Inserts blank lines unless they exist already.
 -- (@blanklines m <> blanklines n@ has the same effect as @blanklines (max m n)@.
-blanklines :: Int -> D a
+blanklines :: Int -> Doc a
 blanklines n = BlankLines n
 
 -- | Uses the specified string as a prefix for every line of
 -- the inside document (except the first, if not at the beginning
 -- of the line).
-prefixed :: IsString a => String -> D a -> D a
+prefixed :: IsString a => String -> Doc a -> Doc a
 prefixed pref doc = Prefixed (fromString pref) doc
 
 -- | Makes a 'Doc' flush against the left margin.
-flush :: D a -> D a
+flush :: Doc a -> Doc a
 flush doc = Flush doc
 
 -- | Indents a 'Doc' by the specified number of spaces.
-nest :: IsString a => Int -> D a -> D a
+nest :: IsString a => Int -> Doc a -> Doc a
 nest ind = prefixed (replicate ind ' ')
 
 -- | A hanging indent. @hang ind start doc@ prints @start@,
 -- then @doc@, leaving an indent of @ind@ spaces on every
 -- line but the first.
-hang :: IsString a => Int -> D a -> D a -> D a
+hang :: IsString a => Int -> Doc a -> Doc a -> Doc a
 hang ind start doc = start <> nest ind doc
 
 -- | @beforeNonBlank d@ conditionally includes @d@ unless it is
 -- followed by blank space.
-beforeNonBlank :: D a -> D a
+beforeNonBlank :: Doc a -> Doc a
 beforeNonBlank d = BeforeNonBlank d
 
 -- | Makes a 'Doc' non-reflowable.
-nowrap :: IsString a => D a -> D a
+nowrap :: IsString a => Doc a -> Doc a
 nowrap doc = mconcat . map replaceSpace . unfoldD $ doc
   where replaceSpace BreakingSpace = Text 1 $ fromString " "
         replaceSpace x             = x
 
 -- | Content to print only if it comes at the beginning of a line,
 -- to be used e.g. for escaping line-initial `.` in roff man.
-afterBreak :: Text -> D a
+afterBreak :: Text -> Doc a
 afterBreak t = AfterBreak t
 
 -- | Returns the width of a 'Doc'.
-offset :: D Text -> Int
-offset d = maximum (0: map realLength (T.lines $ render Nothing d))
+offset :: HasChars a => Doc a -> Int
+offset d = maximum (0: map realLength (splitLines $ render Nothing d))
 
 -- | Returns the minimal width of a 'Doc' when reflowed at breakable spaces.
-minOffset :: D Text -> Int
-minOffset d = maximum (0: map realLength (T.lines $ render (Just 0) d))
+minOffset :: HasChars a => Doc a -> Int
+minOffset d = maximum (0: map realLength (splitLines $ render (Just 0) d))
 
 -- | @lblock n d@ is a block of width @n@ characters, with
 -- text derived from @d@ and aligned to the left.
-lblock :: Int -> D Text -> D Text
+lblock :: HasChars a => Int -> Doc a -> Doc a
 lblock = block id
 
 -- | Like 'lblock' but aligned to the right.
-rblock :: Int -> D Text -> D Text
-rblock w = block (\s -> T.replicate (w - realLength s) " " <> s) w
+rblock :: HasChars a => Int -> Doc a -> Doc a
+rblock w = block (\s -> replicateChar (w - realLength s) ' ' <> s) w
 
 -- | Like 'lblock' but aligned centered.
-cblock :: Int -> D Text -> D Text
-cblock w = block (\s -> T.replicate ((w - realLength s) `div` 2) " " <> s) w
+cblock :: HasChars a => Int -> Doc a -> Doc a
+cblock w = block (\s -> replicateChar ((w - realLength s) `div` 2) ' ' <> s) w
 
 -- | Returns the height of a block or other 'Doc'.
-height :: D Text -> Int
-height = length . T.lines . render Nothing
+height :: HasChars a => Doc a -> Int
+height = length . splitLines . render Nothing
 
-block :: (Text -> Text) -> Int -> D Text -> D Text
+block :: HasChars a => (a -> a) -> Int -> Doc a -> Doc a
 block filler width d
   | width < 1 && not (isEmpty d) = block filler 1 d
   | otherwise                    = Block width $ map filler
                                  $ chop width $ render (Just width) d
 
-chop :: Int -> Text -> [Text]
-chop _ "" = []
-chop n cs = case T.break (=='\n') cs of
-                  (xs, ys)     -> if len <= n
-                                     then case ys of
-                                             ""     -> [xs]
-                                             "\n"   -> [xs]
-                                             _      -> xs : chop n (T.tail ys)
-                                     else T.take n xs : chop n (T.drop n xs <> ys)
-                                   where len = realLength xs
+chop :: HasChars a => Int -> a -> [a]
+chop n =
+   concatMap chopLine . removeFinalEmpty . map addRealLength . splitLines
+ where
+   removeFinalEmpty xs = case lastMay xs of
+                           Just (0, _) -> initSafe xs
+                           _           -> xs
+   addRealLength l = (realLength l, l)
+   chopLine (len, l)
+     | len <= n  = [l]
+     | otherwise = map snd $
+                    foldrChar
+                     (\c ls ->
+                       let clen = charWidth c
+                           cs = replicateChar 1 c
+                        in case ls of
+                             (len', l'):rest
+                               | len' + clen > n ->
+                                   (clen, cs):(len', l'):rest
+                               | otherwise ->
+                                   (len' + clen, l' <> cs):rest
+                             [] -> [(clen, cs)]) [] l
 
 -- | Encloses a 'Doc' inside a start and end 'Doc'.
-inside :: D a -> D a -> D a -> D a
+inside :: Doc a -> Doc a -> Doc a -> Doc a
 inside start end contents =
   start <> contents <> end
 
 -- | Puts a 'Doc' in curly braces.
-braces :: IsString a => D a -> D a
+braces :: IsString a => Doc a -> Doc a
 braces = inside (char '{') (char '}')
 
 -- | Puts a 'Doc' in square brackets.
-brackets :: IsString a => D a -> D a
+brackets :: IsString a => Doc a -> Doc a
 brackets = inside (char '[') (char ']')
 
 -- | Puts a 'Doc' in parentheses.
-parens :: IsString a => D a -> D a
+parens :: IsString a => Doc a -> Doc a
 parens = inside (char '(') (char ')')
 
 -- | Wraps a 'Doc' in single quotes.
-quotes :: IsString a => D a -> D a
+quotes :: IsString a => Doc a -> Doc a
 quotes = inside (char '\'') (char '\'')
 
 -- | Wraps a 'Doc' in double quotes.
-doubleQuotes :: IsString a => D a -> D a
+doubleQuotes :: IsString a => Doc a -> Doc a
 doubleQuotes = inside (char '"') (char '"')
 
 -- | Returns width of a character in a monospace font:  0 for a combining
@@ -582,8 +615,6 @@ charWidth c =
 
 -- | Get real length of string, taking into account combining and double-wide
 -- characters.
-realLength :: Text -> Int
-realLength = T.foldl' (\tot c -> tot + charWidth c) 0
+realLength :: HasChars a => a -> Int
+realLength = foldrChar (\c tot -> tot + charWidth c) 0
 
-realLength' :: String -> Int
-realLength' = foldr (\c tot -> tot + charWidth c) 0
