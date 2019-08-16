@@ -75,17 +75,6 @@ import qualified Data.Text as T
 import Data.Text (Text)
 import qualified Text.DocTemplates as DT
 
-data RenderState a = RenderState{
-         output     :: [a]        -- ^ In reverse order
-       , prefix     :: Text
-       , usePrefix  :: Bool
-       , lineLength :: Maybe Int  -- ^ 'Nothing' means no wrapping
-       , column     :: Int
-       , newlines   :: Int        -- ^ Number of preceding newlines
-       }
-
-type DocState a = State (RenderState a) ()
-
 data D a = Text Int a
          | Block Int [a]
          | Prefixed Text (D a)
@@ -217,6 +206,17 @@ chomp d =
           Empty -> chomp x
           z     -> x <> z
     _                         -> d
+
+type DocState a = State (RenderState a) ()
+
+data RenderState a = RenderState{
+         output     :: [a]        -- ^ In reverse order
+       , prefix     :: Text
+       , usePrefix  :: Bool
+       , lineLength :: Maybe Int  -- ^ 'Nothing' means no wrapping
+       , column     :: Int
+       , newlines   :: Int        -- ^ Number of preceding newlines
+       }
 
 outp :: Int -> Text -> DocState Text
 outp off s | off < 0 = do  -- offset < 0 means newline characters
