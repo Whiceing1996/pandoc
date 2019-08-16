@@ -175,7 +175,7 @@ defField field val (Object hashmap) =
 defField _ _  x = x
 
 -- Produce an HTML tag with the given pandoc attributes.
-tagWithAttrs :: String -> Attr -> Doc
+tagWithAttrs :: HasChars a => String -> Attr -> Doc a
 tagWithAttrs tag (ident,classes,kvs) = hsep
   ["<" <> text tag
   ,if null ident
@@ -236,15 +236,15 @@ unsmartify opts ('\8216':xs) = '\'' : unsmartify opts xs
 unsmartify opts (x:xs) = x : unsmartify opts xs
 unsmartify _ [] = []
 
-gridTable :: Monad m
+gridTable :: (Monad m, HasChars a)
           => WriterOptions
-          -> (WriterOptions -> [Block] -> m Doc)
+          -> (WriterOptions -> [Block] -> m (Doc a))
           -> Bool -- ^ headless
           -> [Alignment]
           -> [Double]
           -> [[Block]]
           -> [[[Block]]]
-          -> m Doc
+          -> m (Doc a)
 gridTable opts blocksToDoc headless aligns widths headers rows = do
   -- the number of columns will be used in case of even widths
   let numcols = maximum (length aligns : length widths :

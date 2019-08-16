@@ -53,7 +53,7 @@ pandocToOrg (Pandoc meta blocks) = do
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
-  let render' :: Doc -> Text
+  let render' :: Doc Text -> Text
       render' = render colwidth
   metadata <- metaToJSON opts
                (fmap render' . blockListToOrg)
@@ -72,12 +72,12 @@ pandocToOrg (Pandoc meta blocks) = do
        Just tpl -> renderTemplate tpl context
 
 -- | Return Org representation of notes.
-notesToOrg :: PandocMonad m => [[Block]] -> Org m Doc
+notesToOrg :: PandocMonad m => [[Block]] -> Org m (Doc Text)
 notesToOrg notes =
   vsep <$> zipWithM noteToOrg [1..] notes
 
 -- | Return Org representation of a note.
-noteToOrg :: PandocMonad m => Int -> [Block] -> Org m Doc
+noteToOrg :: PandocMonad m => Int -> [Block] -> Org m (Doc Text)
 noteToOrg num note = do
   contents <- blockListToOrg note
   let marker = "[fn:" ++ show num ++ "] "
@@ -99,7 +99,7 @@ isRawFormat f =
 -- | Convert Pandoc block element to Org.
 blockToOrg :: PandocMonad m
            => Block         -- ^ Block element
-           -> Org m Doc
+           -> Org m (Doc Text)
 blockToOrg Null = return empty
 blockToOrg (Div (_,classes@(cls:_),kvs) bs) | "drawer" `elem` classes = do
   contents <- blockListToOrg bs
@@ -237,7 +237,7 @@ blockToOrg (DefinitionList items) = do
   return $ vcat contents $$ blankline
 
 -- | Convert bullet list item (list of blocks) to Org.
-bulletListItemToOrg :: PandocMonad m => [Block] -> Org m Doc
+bulletListItemToOrg :: PandocMonad m => [Block] -> Org m (Doc Text)
 bulletListItemToOrg items = do
   contents <- blockListToOrg items
   return $ hang 2 "- " (contents <> cr)
@@ -246,21 +246,21 @@ bulletListItemToOrg items = do
 orderedListItemToOrg :: PandocMonad m
                      => String   -- ^ marker for list item
                      -> [Block]  -- ^ list item (list of blocks)
-                     -> Org m Doc
+                     -> Org m (Doc Text)
 orderedListItemToOrg marker items = do
   contents <- blockListToOrg items
   return $ hang (length marker + 1) (text marker <> space) (contents <> cr)
 
 -- | Convert definition list item (label, list of blocks) to Org.
 definitionListItemToOrg :: PandocMonad m
-                        => ([Inline], [[Block]]) -> Org m Doc
+                        => ([Inline], [[Block]]) -> Org m (Doc Text)
 definitionListItemToOrg (label, defs) = do
   label' <- inlineListToOrg label
   contents <- vcat <$> mapM blockListToOrg defs
   return . hang 2 "- " $ label' <> " :: " <> (contents <> cr)
 
 -- | Convert list of key/value pairs to Org :PROPERTIES: drawer.
-propertiesDrawer :: Attr -> Doc
+propertiesDrawer :: Attr -> Doc Text
 propertiesDrawer (ident, classes, kv) =
   let
     drawerStart = text ":PROPERTIES:"
@@ -271,11 +271,11 @@ propertiesDrawer (ident, classes, kv) =
   in
     drawerStart <> cr <> properties <> cr <> drawerEnd
  where
-   kvToOrgProperty :: (String, String) -> Doc
+   kvToOrgProperty :: (String, String) -> Doc Text
    kvToOrgProperty (key, value) =
      text ":" <> text key <> text ": " <> text value <> cr
 
-attrHtml :: Attr -> Doc
+attrHtml :: Attr -> Doc Text
 attrHtml (""   , []     , []) = mempty
 attrHtml (ident, classes, kvs) =
   let
@@ -288,13 +288,13 @@ attrHtml (ident, classes, kvs) =
 -- | Convert list of Pandoc block elements to Org.
 blockListToOrg :: PandocMonad m
                => [Block]       -- ^ List of block elements
-               -> Org m Doc
+               -> Org m (Doc Text)
 blockListToOrg blocks = vcat <$> mapM blockToOrg blocks
 
 -- | Convert list of Pandoc inline elements to Org.
 inlineListToOrg :: PandocMonad m
                 => [Inline]
-                -> Org m Doc
+                -> Org m (Doc Text)
 inlineListToOrg lst = hcat <$> mapM inlineToOrg (fixMarkers lst)
   where fixMarkers [] = []  -- prevent note refs and list markers from wrapping, see #4171
         fixMarkers (Space : x : rest) | shouldFix x =
@@ -309,7 +309,7 @@ inlineListToOrg lst = hcat <$> mapM inlineToOrg (fixMarkers lst)
         shouldFix _ = False
 
 -- | Convert Pandoc inline element to Org.
-inlineToOrg :: PandocMonad m => Inline -> Org m Doc
+inlineToOrg :: PandocMonad m => Inline -> Org m (Doc Text)
 inlineToOrg (Span (uid, [], []) []) =
   return $ "<<" <> text uid <> ">>"
 inlineToOrg (Span _ lst) =

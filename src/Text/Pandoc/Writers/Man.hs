@@ -44,7 +44,7 @@ pandocToMan opts (Pandoc meta blocks) = do
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
-  let render' :: Doc -> Text
+  let render' :: Doc Text -> Text
       render' = render colwidth
   titleText <- inlineListToMan opts $ docTitle meta
   let title' = render' titleText
@@ -85,7 +85,7 @@ escString :: WriterOptions -> String -> String
 escString _ = escapeString AsciiOnly -- for better portability
 
 -- | Return man representation of notes.
-notesToMan :: PandocMonad m => WriterOptions -> [[Block]] -> StateT WriterState m Doc
+notesToMan :: PandocMonad m => WriterOptions -> [[Block]] -> StateT WriterState m (Doc Text)
 notesToMan opts notes =
   if null notes
      then return empty
@@ -93,7 +93,7 @@ notesToMan opts notes =
           return . (text ".SH NOTES" $$) . vcat
 
 -- | Return man representation of a note.
-noteToMan :: PandocMonad m => WriterOptions -> Int -> [Block] -> StateT WriterState m Doc
+noteToMan :: PandocMonad m => WriterOptions -> Int -> [Block] -> StateT WriterState m (Doc Text)
 noteToMan opts num note = do
   contents <- blockListToMan opts note
   let marker = cr <> text ".SS " <> brackets (text (show num))
@@ -107,7 +107,7 @@ noteToMan opts num note = do
 blockToMan :: PandocMonad m
            => WriterOptions -- ^ Options
            -> Block         -- ^ Block element
-           -> StateT WriterState m Doc
+           -> StateT WriterState m (Doc Text)
 blockToMan _ Null = return empty
 blockToMan opts (Div _ bs) = blockListToMan opts bs
 blockToMan opts (Plain inlines) =
@@ -187,7 +187,7 @@ blockToMan opts (DefinitionList items) = do
   return (vcat contents)
 
 -- | Convert bullet list item (list of blocks) to man.
-bulletListItemToMan :: PandocMonad m => WriterOptions -> [Block] -> StateT WriterState m Doc
+bulletListItemToMan :: PandocMonad m => WriterOptions -> [Block] -> StateT WriterState m (Doc Text)
 bulletListItemToMan _ [] = return empty
 bulletListItemToMan opts (Para first:rest) =
   bulletListItemToMan opts (Plain first:rest)
@@ -210,7 +210,7 @@ orderedListItemToMan :: PandocMonad m
                      -> String   -- ^ order marker for list item
                      -> Int      -- ^ number of spaces to indent
                      -> [Block]  -- ^ list item (list of blocks)
-                     -> StateT WriterState m Doc
+                     -> StateT WriterState m (Doc Text)
 orderedListItemToMan _ _ _ [] = return empty
 orderedListItemToMan opts num indent (Para first:rest) =
   orderedListItemToMan opts num indent (Plain first:rest)
@@ -228,7 +228,7 @@ orderedListItemToMan opts num indent (first:rest) = do
 definitionListItemToMan :: PandocMonad m
                         => WriterOptions
                         -> ([Inline],[[Block]])
-                        -> StateT WriterState m Doc
+                        -> StateT WriterState m (Doc Text)
 definitionListItemToMan opts (label, defs) = do
   -- in most man pages, option and other code in option lists is boldface,
   -- but not other things, so we try to reproduce this style:
@@ -260,16 +260,16 @@ makeCodeBold = walk go
 blockListToMan :: PandocMonad m
                => WriterOptions -- ^ Options
                -> [Block]       -- ^ List of block elements
-               -> StateT WriterState m Doc
+               -> StateT WriterState m (Doc Text)
 blockListToMan opts blocks =
   vcat <$> mapM (blockToMan opts) blocks
 
 -- | Convert list of Pandoc inline elements to man.
-inlineListToMan :: PandocMonad m => WriterOptions -> [Inline] -> StateT WriterState m Doc
+inlineListToMan :: PandocMonad m => WriterOptions -> [Inline] -> StateT WriterState m (Doc Text)
 inlineListToMan opts lst = hcat <$> mapM (inlineToMan opts) lst
 
 -- | Convert Pandoc inline element to man.
-inlineToMan :: PandocMonad m => WriterOptions -> Inline -> StateT WriterState m Doc
+inlineToMan :: PandocMonad m => WriterOptions -> Inline -> StateT WriterState m (Doc Text)
 inlineToMan opts (Span _ ils) = inlineListToMan opts ils
 inlineToMan opts (Emph lst) =
   withFontFeature 'I' (inlineListToMan opts lst)

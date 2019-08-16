@@ -56,7 +56,7 @@ data WriterState =
               , stInMinipage    :: Bool          -- true if in minipage 
               , stInHeading     :: Bool          -- true if in a section heading
               , stInItem        :: Bool          -- true if in \item[..]
-              , stNotes         :: [Doc]         -- notes in a minipage
+              , stNotes         :: [Doc Text]    -- notes in a minipage
               , stOLLevel       :: Int           -- level of ordered list nesting
               , stOptions       :: WriterOptions -- writer options, so they don't have to be parameter
               , stVerbInNote    :: Bool          -- true if document has verbatim text in note
@@ -133,7 +133,7 @@ pandocToLaTeX options (Pandoc meta blocks) = do
   let colwidth = if writerWrapText options == WrapAuto
                     then Just $ writerColumns options
                     else Nothing
-  let render' :: Doc -> Text
+  let render' :: Doc Text -> Text
       render' = render colwidth
   metadata <- metaToJSON options
               (fmap render' . blockListToLaTeX)
@@ -283,7 +283,7 @@ pandocToLaTeX options (Pandoc meta blocks) = do
        Just tpl -> renderTemplate tpl context'
 
 -- | Convert Elements to LaTeX
-elementToLaTeX :: PandocMonad m => WriterOptions -> Element -> LW m Doc
+elementToLaTeX :: PandocMonad m => WriterOptions -> Element -> LW m (Doc Text)
 elementToLaTeX _ (Blk block) = blockToLaTeX block
 elementToLaTeX opts (Sec level _ (id',classes,_) title' elements) = do
   modify $ \s -> s{stInHeading = True}
@@ -435,7 +435,7 @@ toLabel z = go `fmap` stringToLaTeX URLString z
          | otherwise = "ux" ++ printf "%x" (ord x) ++ go xs
 
 -- | Puts contents into LaTeX command.
-inCmd :: String -> Doc -> Doc
+inCmd :: String -> Doc Text -> Doc Text
 inCmd cmd contents = char '\\' <> text cmd <> braces contents
 
 toSlides :: PandocMonad m => [Block] -> LW m [Block]
@@ -514,7 +514,7 @@ isListBlock _                  = False
 -- | Convert Pandoc block element to LaTeX.
 blockToLaTeX :: PandocMonad m
              => Block     -- ^ Block to convert
-             -> LW m Doc
+             -> LW m (Doc Text)
 blockToLaTeX Null = return empty
 blockToLaTeX (Div (identifier,classes,kvs) bs)
   | "incremental" `elem` classes = do
@@ -820,7 +820,8 @@ blockToLaTeX (Table caption aligns widths heads rows) = do
          $$ captNotes
          $$ notes
 
-getCaption :: PandocMonad m => Bool -> [Inline] -> LW m (Doc, Doc, Doc)
+getCaption :: PandocMonad m
+           => Bool -> [Inline] -> LW m (Doc Text, Doc Text, Doc Text)
 getCaption externalNotes txt = do
   oldExternalNotes <- gets stExternalNotes
   modify $ \st -> st{ stExternalNotes = externalNotes, stNotes = [] }
@@ -846,7 +847,7 @@ toColDescriptor align =
          AlignCenter  -> "c"
          AlignDefault -> "l"
 
-blockListToLaTeX :: PandocMonad m => [Block] -> LW m Doc
+blockListToLaTeX :: PandocMonad m => [Block] -> LW m (Doc Text)
 blockListToLaTeX lst =
   vsep `fmap` mapM (\b -> setEmptyLine True >> blockToLaTeX b) lst
 
@@ -855,7 +856,7 @@ tableRowToLaTeX :: PandocMonad m
                 -> [Alignment]
                 -> [Double]
                 -> [[Block]]
-                -> LW m Doc
+                -> LW m (Doc Text)
 tableRowToLaTeX header aligns widths cols = do
   -- scale factor compensates for extra space between columns
   -- so the whole table isn't larger than columnwidth
@@ -897,7 +898,7 @@ displayMathToInline (Math DisplayMath x) = Math InlineMath x
 displayMathToInline x                    = x
 
 tableCellToLaTeX :: PandocMonad m => Bool -> (Double, Alignment, [Block])
-                 -> LW m Doc
+                 -> LW m (Doc Text)
 tableCellToLaTeX _      (0,     _,     blocks) =
   blockListToLaTeX $ walk fixLineBreaks $ walk displayMathToInline blocks
 tableCellToLaTeX header (width, align, blocks) = do
@@ -922,7 +923,7 @@ tableCellToLaTeX header (width, align, blocks) = do
             (halign <> cr <> cellContents <> "\\strut" <> cr) <>
             "\\end{minipage}")
 
-notesToLaTeX :: [Doc] -> Doc
+notesToLaTeX :: [Doc Text] -> Doc Text
 notesToLaTeX [] = empty
 notesToLaTeX ns = (case length ns of
                               n | n > 1 -> "\\addtocounter" <>
@@ -935,7 +936,7 @@ notesToLaTeX ns = (case length ns of
                      $ map (\x -> "\\footnotetext" <> braces x)
                      $ reverse ns)
 
-listItemToLaTeX :: PandocMonad m => [Block] -> LW m Doc
+listItemToLaTeX :: PandocMonad m => [Block] -> LW m (Doc Text)
 listItemToLaTeX lst
   -- we need to put some text before a header if it's the first
   -- element in an item. This will look ugly in LaTeX regardless, but
@@ -957,7 +958,7 @@ listItemToLaTeX lst
       return $ "\\item" <> brackets checkbox
         $$ nest 2 (isContents $+$ bsContents)
 
-defListItemToLaTeX :: PandocMonad m => ([Inline], [[Block]]) -> LW m Doc
+defListItemToLaTeX :: PandocMonad m => ([Inline], [[Block]]) -> LW m (Doc Text)
 defListItemToLaTeX (term, defs) = do
     -- needed to turn off 'listings' because it breaks inside \item[...]:
     modify $ \s -> s{stInItem = True}
@@ -985,7 +986,7 @@ sectionHeader :: PandocMonad m
               -> [Char]
               -> Int
               -> [Inline]
-              -> LW m Doc
+              -> LW m (Doc Text)
 sectionHeader unnumbered ident level lst = do
   txt <- inlineListToLaTeX lst
   plain <- stringToLaTeX TextString $ concatMap stringify lst
@@ -1002,7 +1003,7 @@ sectionHeader unnumbered ident level lst = do
                  then return empty
                  else
                    return $ brackets txtNoNotes
-  let contents = if render Nothing txt == plain
+  let contents = if render Nothing txt == T.pack plain
                     then braces txt
                     else braces (text "\\texorpdfstring"
                          <> braces txt
@@ -1051,7 +1052,7 @@ sectionHeader unnumbered ident level lst = do
                                 braces txtNoNotes
                          else empty
 
-hypertarget :: PandocMonad m => Bool -> String -> Doc -> LW m Doc
+hypertarget :: PandocMonad m => Bool -> String -> Doc Text -> LW m (Doc Text)
 hypertarget _ "" x    = return x
 hypertarget addnewline ident x = do
   ref <- text `fmap` toLabel ident
@@ -1061,7 +1062,7 @@ hypertarget addnewline ident x = do
                              then ("%" <> cr)
                              else empty) <> x)
 
-labelFor :: PandocMonad m => String -> LW m Doc
+labelFor :: PandocMonad m => String -> LW m (Doc Text)
 labelFor ""    = return empty
 labelFor ident = do
   ref <- text `fmap` toLabel ident
@@ -1070,7 +1071,7 @@ labelFor ident = do
 -- | Convert list of inline elements to LaTeX.
 inlineListToLaTeX :: PandocMonad m
                   => [Inline]  -- ^ Inlines to convert
-                  -> LW m Doc
+                  -> LW m (Doc Text)
 inlineListToLaTeX lst =
   mapM inlineToLaTeX (fixLineInitialSpaces . fixInitialLineBreaks $ lst)
     >>= return . hcat
@@ -1098,7 +1099,7 @@ isQuoted _            = False
 -- | Convert inline element to LaTeX
 inlineToLaTeX :: PandocMonad m
               => Inline    -- ^ Inline to convert
-              -> LW m Doc
+              -> LW m (Doc Text)
 inlineToLaTeX (Span (id',classes,kvs) ils) = do
   linkAnchor <- hypertarget False id' empty
   lang <- toLang $ lookup "lang" kvs
@@ -1342,7 +1343,7 @@ protectCode x = [x]
 setEmptyLine :: PandocMonad m => Bool -> LW m ()
 setEmptyLine b = modify $ \st -> st{ stEmptyLine = b }
 
-citationsToNatbib :: PandocMonad m => [Citation] -> LW m Doc
+citationsToNatbib :: PandocMonad m => [Citation] -> LW m (Doc Text)
 citationsToNatbib
             [one]
   = citeCommand c p s k
@@ -1393,13 +1394,13 @@ citationsToNatbib cits = do
                NormalCitation -> citeCommand "citealp"  p s k
 
 citeCommand :: PandocMonad m
-            => String -> [Inline] -> [Inline] -> String -> LW m Doc
+            => String -> [Inline] -> [Inline] -> String -> LW m (Doc Text)
 citeCommand c p s k = do
   args <- citeArguments p s k
   return $ text ("\\" ++ c) <> args
 
 citeArguments :: PandocMonad m
-              => [Inline] -> [Inline] -> String -> LW m Doc
+              => [Inline] -> [Inline] -> String -> LW m (Doc Text)
 citeArguments p s k = do
   let s' = case s of
         (Str
@@ -1414,7 +1415,7 @@ citeArguments p s k = do
                      (_   , _    ) -> brackets pdoc <> brackets sdoc
   return $ optargs <> braces (text k)
 
-citationsToBiblatex :: PandocMonad m => [Citation] -> LW m Doc
+citationsToBiblatex :: PandocMonad m => [Citation] -> LW m (Doc Text)
 citationsToBiblatex
             [one]
   = citeCommand cmd p s k

@@ -64,7 +64,7 @@ convertDate ils = maybe "" showDateTimeRFC822 $
   parseTimeM True defaultTimeLocale "%F" =<< normalizeDate (stringify ils)
 
 -- | Convert an Element to OPML.
-elementToOPML :: PandocMonad m => WriterOptions -> Element -> m Doc
+elementToOPML :: PandocMonad m => WriterOptions -> Element -> m (Doc Text)
 elementToOPML _ (Blk _) = return empty
 elementToOPML opts (Sec _ _num _ title elements) = do
   let isBlk :: Element -> Bool

@@ -60,7 +60,7 @@ pandocToConTeXt options (Pandoc meta blocks) = do
   let colwidth = if writerWrapText options == WrapAuto
                     then Just $ writerColumns options
                     else Nothing
-  let render' :: Doc -> Text
+  let render' :: Doc Text -> Text
       render' = render colwidth
   metadata <- metaToJSON options
               (fmap render' . blockListToConTeXt)
@@ -143,7 +143,7 @@ toLabel z = concatMap go z
          | otherwise = [x]
 
 -- | Convert Elements to ConTeXt
-elementToConTeXt :: PandocMonad m => WriterOptions -> Element -> WM m Doc
+elementToConTeXt :: PandocMonad m => WriterOptions -> Element -> WM m (Doc Text)
 elementToConTeXt _ (Blk block) = blockToConTeXt block
 elementToConTeXt opts (Sec level _ attr title' elements) = do
   header' <- sectionHeader attr level title'
@@ -152,7 +152,7 @@ elementToConTeXt opts (Sec level _ attr title' elements) = do
   return $ header' $$ vcat innerContents $$ footer'
 
 -- | Convert Pandoc block element to ConTeXt.
-blockToConTeXt :: PandocMonad m => Block -> WM m Doc
+blockToConTeXt :: PandocMonad m => Block -> WM m (Doc Text)
 blockToConTeXt Null = return empty
 blockToConTeXt (Plain lst) = inlineListToConTeXt lst
 -- title beginning with fig: indicates that the image is a figure
@@ -258,7 +258,8 @@ blockToConTeXt (Table caption aligns widths heads rows) = do
         else "title=" <> braces captionText
       ) $$ body $$ "\\stopplacetable" <> blankline
 
-tableToConTeXt :: PandocMonad m => Tabl -> Doc -> [Doc] -> WM m Doc
+tableToConTeXt :: PandocMonad m
+               => Tabl -> Doc Text -> [Doc Text] -> WM m (Doc Text)
 tableToConTeXt Xtb heads rows =
   return $ "\\startxtable" $$
     (if isEmpty heads
@@ -280,7 +281,7 @@ tableToConTeXt Ntb heads rows =
            "\\startTABLEfoot" $$ last rows $$ "\\stopTABLEfoot") $$
     "\\stopTABLE"
 
-tableRowToConTeXt :: PandocMonad m => Tabl -> [Alignment] -> [Double] -> [[Block]] -> WM m Doc
+tableRowToConTeXt :: PandocMonad m => Tabl -> [Alignment] -> [Double] -> [[Block]] -> WM m (Doc Text)
 tableRowToConTeXt Xtb aligns widths cols = do
   cells <- mapM (tableColToConTeXt Xtb) $ zip3 aligns widths cols
   return $ "\\startxrow" $$ vcat cells $$ "\\stopxrow"
@@ -288,7 +289,7 @@ tableRowToConTeXt Ntb aligns widths cols = do
   cells <- mapM (tableColToConTeXt Ntb) $ zip3 aligns widths cols
   return $ vcat cells $$ "\\NC\\NR"
 
-tableColToConTeXt :: PandocMonad m => Tabl -> (Alignment, Double, [Block]) -> WM m Doc
+tableColToConTeXt :: PandocMonad m => Tabl -> (Alignment, Double, [Block]) -> WM m (Doc Text)
 tableColToConTeXt tabl (align, width, blocks) = do
   cellContents <- blockListToConTeXt blocks
   let colwidth = if width == 0
@@ -301,23 +302,24 @@ tableColToConTeXt tabl (align, width, blocks) = do
         where keys = hcat $ intersperse "," $ filter (not . isEmpty) [halign, colwidth]
   tableCellToConTeXt tabl options cellContents
 
-tableCellToConTeXt :: PandocMonad m => Tabl -> Doc -> Doc -> WM m Doc
+tableCellToConTeXt :: PandocMonad m
+                   => Tabl -> Doc Text -> Doc Text -> WM m (Doc Text)
 tableCellToConTeXt Xtb options cellContents =
   return $ "\\startxcell" <> options <> cellContents <> " \\stopxcell"
 tableCellToConTeXt Ntb options cellContents =
   return $ "\\NC" <> options <> cellContents
 
-alignToConTeXt :: Alignment -> Doc
+alignToConTeXt :: Alignment -> Doc Text
 alignToConTeXt align = case align of
                          AlignLeft    -> "align=right"
                          AlignRight   -> "align=left"
                          AlignCenter  -> "align=middle"
                          AlignDefault -> empty
 
-listItemToConTeXt :: PandocMonad m => [Block] -> WM m Doc
+listItemToConTeXt :: PandocMonad m => [Block] -> WM m (Doc Text)
 listItemToConTeXt list = (("\\item" $$) . nest 2) <$> blockListToConTeXt list
 
-defListItemToConTeXt :: PandocMonad m => ([Inline], [[Block]]) -> WM m Doc
+defListItemToConTeXt :: PandocMonad m => ([Inline], [[Block]]) -> WM m (Doc Text)
 defListItemToConTeXt (term, defs) = do
   term' <- inlineListToConTeXt term
   def'  <- liftM vsep $ mapM blockListToConTeXt defs
@@ -325,13 +327,13 @@ defListItemToConTeXt (term, defs) = do
            "\\stopdescription" <> blankline
 
 -- | Convert list of block elements to ConTeXt.
-blockListToConTeXt :: PandocMonad m => [Block] -> WM m Doc
+blockListToConTeXt :: PandocMonad m => [Block] -> WM m (Doc Text)
 blockListToConTeXt lst = liftM vcat $ mapM blockToConTeXt lst
 
 -- | Convert list of inline elements to ConTeXt.
 inlineListToConTeXt :: PandocMonad m
                     => [Inline]  -- ^ Inlines to convert
-                    -> WM m Doc
+                    -> WM m (Doc Text)
 inlineListToConTeXt lst = liftM hcat $ mapM inlineToConTeXt $ addStruts lst
   -- We add a \strut after a line break that precedes a space,
   -- or the space gets swallowed
@@ -347,7 +349,7 @@ inlineListToConTeXt lst = liftM hcat $ mapM inlineToConTeXt $ addStruts lst
 -- | Convert inline element to ConTeXt
 inlineToConTeXt :: PandocMonad m
                 => Inline    -- ^ Inline to convert
-                -> WM m Doc
+                -> WM m (Doc Text)
 inlineToConTeXt (Emph lst) = do
   contents <- inlineListToConTeXt lst
   return $ braces $ "\\em " <> contents
@@ -474,7 +476,7 @@ sectionHeader :: PandocMonad m
               => Attr
               -> Int
               -> [Inline]
-              -> WM m Doc
+              -> WM m (Doc Text)
 sectionHeader (ident,classes,kvs) hdrLevel lst = do
   opts <- gets stOptions
   contents <- inlineListToConTeXt lst
@@ -495,7 +497,7 @@ sectionHeader (ident,classes,kvs) hdrLevel lst = do
   return $ starter <> levelText <> options <> blankline
 
 -- | Craft the section footer
-sectionFooter :: PandocMonad m => Attr -> Int -> WM m Doc
+sectionFooter :: PandocMonad m => Attr -> Int -> WM m (Doc Text)
 sectionFooter attr hdrLevel = do
   opts <- gets stOptions
   levelText <- sectionLevelToText opts attr hdrLevel
@@ -504,7 +506,7 @@ sectionFooter attr hdrLevel = do
            else empty
 
 -- | Generate a textual representation of the section level
-sectionLevelToText :: PandocMonad m => WriterOptions -> Attr -> Int -> WM m Doc
+sectionLevelToText :: PandocMonad m => WriterOptions -> Attr -> Int -> WM m (Doc Text)
 sectionLevelToText opts (_,classes,_) hdrLevel = do
   let level' = case writerTopLevelDivision opts of
                  TopLevelPart    -> hdrLevel - 2

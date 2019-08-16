@@ -24,6 +24,7 @@ import Prelude
 import Data.Char (ord, isAscii)
 import Control.Monad.State.Strict
 import qualified Data.Map as Map
+import Data.String
 import Data.Maybe (fromMaybe, isJust, catMaybes)
 import Text.Pandoc.Class (PandocMonad)
 import Text.Pandoc.Definition
@@ -97,7 +98,7 @@ escapeString escapeMode (x:xs) =
 characterCodeMap :: Map.Map Char String
 characterCodeMap = Map.fromList characterCodes
 
-fontChange :: PandocMonad m => MS m Doc
+fontChange :: (IsString a, PandocMonad m) => MS m (Doc a)
 fontChange = do
   features <- gets stFontFeatures
   inHeader <- gets stInHeader
@@ -110,7 +111,8 @@ fontChange = do
        then text "\\f[R]"
        else text $ "\\f[" ++ filling ++ "]"
 
-withFontFeature :: PandocMonad m => Char -> MS m Doc -> MS m Doc
+withFontFeature :: (IsString a, PandocMonad m)
+                => Char -> MS m (Doc a) -> MS m (Doc a)
 withFontFeature c action = do
   modify $ \st -> st{ stFontFeatures = Map.adjust not c $ stFontFeatures st }
   begin <- fontChange

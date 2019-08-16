@@ -111,13 +111,13 @@ writePlain :: PandocMonad m => WriterOptions -> Pandoc -> m Text
 writePlain opts document =
   evalMD (pandocToMarkdown opts document) def{ envPlain = True } def
 
-pandocTitleBlock :: Doc -> [Doc] -> Doc -> Doc
+pandocTitleBlock :: Doc Text -> [Doc Text] -> Doc Text -> Doc Text
 pandocTitleBlock tit auths dat =
   hang 2 (text "% ") tit <> cr <>
   hang 2 (text "% ") (vcat $ map nowrap auths) <> cr <>
   hang 2 (text "% ") dat <> cr
 
-mmdTitleBlock :: Context Doc -> Doc
+mmdTitleBlock :: Context (Doc Text) -> Doc Text
 mmdTitleBlock (Context hashmap) =
   vcat $ map go $ sortBy (comparing fst) $ M.toList hashmap
   where go (k,v) =
@@ -137,16 +137,16 @@ mmdTitleBlock (Context hashmap) =
         --                        if all isSpace x then "." else x) . lines
 mmdTitleBlock _ = empty
 
-plainTitleBlock :: Doc -> [Doc] -> Doc -> Doc
+plainTitleBlock :: Doc Text -> [Doc Text] -> Doc Text -> Doc Text
 plainTitleBlock tit auths dat =
   tit <> cr <>
   (hcat (intersperse (text "; ") auths)) <> cr <>
   dat <> cr
 
-yamlMetadataBlock :: Context Doc -> Doc
+yamlMetadataBlock :: Context (Doc Text) -> Doc Text
 yamlMetadataBlock v = "---" $$ (contextToYaml v) $$ "---"
 
-contextToYaml :: Context Doc -> Doc
+contextToYaml :: Context (Doc Text) -> Doc Text
 contextToYaml (Context o) =
   vcat $ map keyvalToYaml $ sortBy (comparing fst) $ M.toList o
  where
@@ -163,7 +163,7 @@ contextToYaml (Context o) =
                (_, NullVal)       -> empty
                (k', _)            -> k' <> ":" <> space <> hang 2 "" (valToYaml v)
 
-valToYaml :: Val Doc -> Doc
+valToYaml :: Val (Doc Text) -> Doc Text
 valToYaml (ListVal xs) =
   vcat $ map (\v -> hang 2 "- " (valToYaml v)) xs
 valToYaml (MapVal c) = contextToYaml c
@@ -231,14 +231,14 @@ pandocToMarkdown opts (Pandoc meta blocks) = do
        Just tpl -> renderTemplate tpl context
 
 -- | Return markdown representation of reference key table.
-refsToMarkdown :: PandocMonad m => WriterOptions -> Refs -> MD m Doc
+refsToMarkdown :: PandocMonad m => WriterOptions -> Refs -> MD m (Doc Text)
 refsToMarkdown opts refs = mapM (keyToMarkdown opts) refs >>= return . vcat
 
 -- | Return markdown representation of a reference key.
 keyToMarkdown :: PandocMonad m
               => WriterOptions
               -> Ref
-              -> MD m Doc
+              -> MD m (Doc Text)
 keyToMarkdown opts (label', (src, tit), attr) = do
   let tit' = if null tit
                 then empty
@@ -248,7 +248,7 @@ keyToMarkdown opts (label', (src, tit), attr) = do
             <+> linkAttributes opts attr
 
 -- | Return markdown representation of notes.
-notesToMarkdown :: PandocMonad m => WriterOptions -> [[Block]] -> MD m Doc
+notesToMarkdown :: PandocMonad m => WriterOptions -> [[Block]] -> MD m (Doc Text)
 notesToMarkdown opts notes = do
   n <- gets stNoteNum
   notes' <- mapM (\(num, note) -> noteToMarkdown opts num note) (zip [n..] notes)
@@ -256,7 +256,7 @@ notesToMarkdown opts notes = do
   return $ vsep notes'
 
 -- | Return markdown representation of a note.
-noteToMarkdown :: PandocMonad m => WriterOptions -> Int -> [Block] -> MD m Doc
+noteToMarkdown :: PandocMonad m => WriterOptions -> Int -> [Block] -> MD m (Doc Text)
 noteToMarkdown opts num blocks = do
   contents  <- blockListToMarkdown opts blocks
   let num' = text $ writerIdentifierPrefix opts ++ show num
@@ -312,7 +312,7 @@ escapeString opts =
                    _            -> '.':go cs
        _   -> c : go cs
 
-attrsToMarkdown :: Attr -> Doc
+attrsToMarkdown :: Attr -> Doc Text
 attrsToMarkdown attribs = braces $ hsep [attribId, attribClasses, attribKeys]
         where attribId = case attribs of
                                 ([],_,_) -> empty
@@ -333,7 +333,7 @@ attrsToMarkdown attribs = braces $ hsep [attribId, attribClasses, attribKeys]
               escAttrChar '\\' = text "\\\\"
               escAttrChar c    = text [c]
 
-linkAttributes :: WriterOptions -> Attr -> Doc
+linkAttributes :: WriterOptions -> Attr -> Doc Text
 linkAttributes opts attr =
   if isEnabled Ext_link_attributes opts && attr /= nullAttr
      then attrsToMarkdown attr
@@ -355,7 +355,7 @@ beginsWithOrderedListMarker str =
          Left  _ -> False
          Right _ -> True
 
-notesAndRefs :: PandocMonad m => WriterOptions -> MD m Doc
+notesAndRefs :: PandocMonad m => WriterOptions -> MD m (Doc Text)
 notesAndRefs opts = do
   notes' <- reverse <$> gets stNotes >>= notesToMarkdown opts
   modify $ \s -> s { stNotes = [] }
@@ -377,7 +377,7 @@ notesAndRefs opts = do
 blockToMarkdown :: PandocMonad m
                 => WriterOptions -- ^ Options
                 -> Block         -- ^ Block element
-                -> MD m Doc
+                -> MD m (Doc Text)
 blockToMarkdown opts blk =
   local (\env -> env {envBlockLevel = envBlockLevel env + 1}) $
   do doc <- blockToMarkdown' opts blk
@@ -389,7 +389,7 @@ blockToMarkdown opts blk =
 blockToMarkdown' :: PandocMonad m
                  => WriterOptions -- ^ Options
                  -> Block         -- ^ Block element
-                 -> MD m Doc
+                 -> MD m (Doc Text)
 blockToMarkdown' _ Null = return empty
 blockToMarkdown' opts (Div attrs ils) = do
   contents <- blockListToMarkdown opts ils
@@ -419,7 +419,7 @@ blockToMarkdown' opts (Plain inlines) = do
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
-  let rendered = render colwidth contents
+  let rendered = T.unpack $ render colwidth contents
   let escapeMarker (x:xs) | x `elem` (".()" :: String) = '\\':x:xs
                           | otherwise                  = x : escapeMarker xs
       escapeMarker []                                  = []
@@ -659,7 +659,9 @@ addMarkdownAttribute s =
                                  x /= "markdown"]
        _ -> s
 
-pipeTable :: PandocMonad m => Bool -> [Alignment] -> [Doc] -> [[Doc]] -> MD m Doc
+pipeTable :: PandocMonad m
+          => Bool -> [Alignment] -> [Doc Text] -> [[Doc Text]]
+          -> MD m (Doc Text)
 pipeTable headless aligns rawHeaders rawRows = do
   let sp = text " "
   let blockFor AlignLeft   x y = lblock (x + 2) (sp <> y) <> lblock 0 empty
@@ -689,7 +691,7 @@ pipeTable headless aligns rawHeaders rawRows = do
 
 pandocTable :: PandocMonad m
             => WriterOptions -> Bool -> Bool -> [Alignment] -> [Double]
-            -> [Doc] -> [[Doc]] -> MD m Doc
+            -> [Doc Text] -> [[Doc Text]] -> MD m (Doc Text)
 pandocTable opts multiline headless aligns widths rawHeaders rawRows = do
   let isSimple = all (==0) widths
   let alignHeader alignment = case alignment of
@@ -749,7 +751,7 @@ itemEndsWithTightList bs =
         _                           -> False
 
 -- | Convert bullet list item (list of blocks) to markdown.
-bulletListItemToMarkdown :: PandocMonad m => WriterOptions -> [Block] -> MD m Doc
+bulletListItemToMarkdown :: PandocMonad m => WriterOptions -> [Block] -> MD m (Doc Text)
 bulletListItemToMarkdown opts bs = do
   let exts = writerExtensions opts
   contents <- blockListToMarkdown opts $ taskListItemToAscii exts bs
@@ -766,7 +768,7 @@ orderedListItemToMarkdown :: PandocMonad m
                           => WriterOptions -- ^ options
                           -> String        -- ^ list item marker
                           -> [Block]       -- ^ list item (list of blocks)
-                          -> MD m Doc
+                          -> MD m (Doc Text)
 orderedListItemToMarkdown opts marker bs = do
   let exts = writerExtensions opts
   contents <- blockListToMarkdown opts $ taskListItemToAscii exts bs
@@ -784,7 +786,7 @@ orderedListItemToMarkdown opts marker bs = do
 definitionListItemToMarkdown :: PandocMonad m
                              => WriterOptions
                              -> ([Inline],[[Block]])
-                             -> MD m Doc
+                             -> MD m (Doc Text)
 definitionListItemToMarkdown opts (label, defs) = do
   labelText <- blockToMarkdown opts (Plain label)
   defs' <- mapM (mapM (blockToMarkdown opts)) defs
@@ -817,7 +819,7 @@ definitionListItemToMarkdown opts (label, defs) = do
 blockListToMarkdown :: PandocMonad m
                     => WriterOptions -- ^ Options
                     -> [Block]       -- ^ List of block elements
-                    -> MD m Doc
+                    -> MD m (Doc Text)
 blockListToMarkdown opts blocks = do
   inlist <- asks envInList
   isPlain <- asks envPlain
@@ -861,8 +863,8 @@ blockListToMarkdown opts blocks = do
                             else RawBlock "markdown" "&nbsp;\n"
   mapM (blockToMarkdown opts) (fixBlocks blocks) >>= return . cat
 
-getKey :: Doc -> Key
-getKey = toKey . render Nothing
+getKey :: Doc Text -> Key
+getKey = toKey . T.unpack . render Nothing
 
 findUsableIndex :: [String] -> Int -> Int
 findUsableIndex lbls i = if (show i) `elem` lbls
@@ -879,7 +881,7 @@ getNextIndex = do
 
 -- | Get reference for target; if none exists, create unique one and return.
 --   Prefer label if possible; otherwise, generate a unique key.
-getReference :: PandocMonad m => Attr -> Doc -> Target -> MD m String
+getReference :: PandocMonad m => Attr -> Doc Text -> Target -> MD m String
 getReference attr label target = do
   refs <- gets stRefs
   case find (\(_,t,a) -> t == target && a == attr) refs of
@@ -893,7 +895,8 @@ getReference attr label target = do
                                  i <- getNextIndex
                                  modify $ \s -> s{ stLastIdx = i }
                                  return (show i, i)
-                               else return (render Nothing label, 0)
+                               else
+                                 return (T.unpack (render Nothing label), 0)
              modify (\s -> s{
                stRefs = (lab', target, attr) : refs,
                stKeys = M.insert (getKey label)
@@ -904,7 +907,7 @@ getReference attr label target = do
            Just km -> do -- we have refs with this label
              case M.lookup (target, attr) km of
                   Just i -> do
-                    let lab' = render Nothing $
+                    let lab' = T.unpack $ render Nothing $
                                label <> if i == 0
                                            then mempty
                                            else text (show i)
@@ -927,7 +930,7 @@ getReference attr label target = do
                     return lab'
 
 -- | Convert list of Pandoc inline elements to markdown.
-inlineListToMarkdown :: PandocMonad m => WriterOptions -> [Inline] -> MD m Doc
+inlineListToMarkdown :: PandocMonad m => WriterOptions -> [Inline] -> MD m (Doc Text)
 inlineListToMarkdown opts lst = do
   inlist <- asks envInList
   go (if inlist then avoidBadWrapsInList lst else lst)
@@ -997,7 +1000,7 @@ isRight (Right _) = True
 isRight (Left  _) = False
 
 -- | Convert Pandoc inline element to markdown.
-inlineToMarkdown :: PandocMonad m => WriterOptions -> Inline -> MD m Doc
+inlineToMarkdown :: PandocMonad m => WriterOptions -> Inline -> MD m (Doc Text)
 inlineToMarkdown opts (Span ("",["emoji"],kvs) [Str s]) = do
   case lookup "data-emoji" kvs of
        Just emojiname | isEnabled Ext_emoji opts ->
@@ -1050,7 +1053,7 @@ inlineToMarkdown opts (Superscript lst) =
                 else if isEnabled Ext_raw_html opts
                          then "<sup>" <> contents <> "</sup>"
                          else
-                           let rendered = render Nothing contents
+                           let rendered = T.unpack $ render Nothing contents
                            in  case mapM toSuperscript rendered of
                                     Just r  -> text r
                                     Nothing -> text $ "^(" ++ rendered ++ ")"
@@ -1063,7 +1066,7 @@ inlineToMarkdown opts (Subscript lst) =
                 else if isEnabled Ext_raw_html opts
                          then "<sub>" <> contents <> "</sub>"
                          else
-                           let rendered = render Nothing contents
+                           let rendered = T.unpack $ render Nothing contents
                            in  case mapM toSubscript rendered of
                                     Just r  -> text r
                                     Nothing -> text $ "_(" ++ rendered ++ ")"

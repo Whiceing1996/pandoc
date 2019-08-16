@@ -49,7 +49,7 @@ pandocToHaddock opts (Pandoc meta blocks) = do
   body <- blockListToHaddock opts blocks
   st <- get
   notes' <- notesToHaddock opts (reverse $ stNotes st)
-  let render' :: Doc -> Text
+  let render' :: Doc Text -> Text
       render' = render colwidth
   let main = render' $ body <>
                (if isEmpty notes' then empty else blankline <> notes')
@@ -65,7 +65,7 @@ pandocToHaddock opts (Pandoc meta blocks) = do
 
 -- | Return haddock representation of notes.
 notesToHaddock :: PandocMonad m
-               => WriterOptions -> [[Block]] -> StateT WriterState m Doc
+               => WriterOptions -> [[Block]] -> StateT WriterState m (Doc Text)
 notesToHaddock opts notes =
   if null notes
      then return empty
@@ -82,7 +82,7 @@ escapeString = escapeStringUsing haddockEscapes
 blockToHaddock :: PandocMonad m
                => WriterOptions -- ^ Options
                -> Block         -- ^ Block element
-               -> StateT WriterState m Doc
+               -> StateT WriterState m (Doc Text)
 blockToHaddock _ Null = return empty
 blockToHaddock opts (Div _ ils) = do
   contents <- blockListToHaddock opts ils
@@ -144,7 +144,7 @@ blockToHaddock opts (DefinitionList items) = do
 
 -- | Convert bullet list item (list of blocks) to haddock
 bulletListItemToHaddock :: PandocMonad m
-                        => WriterOptions -> [Block] -> StateT WriterState m Doc
+                        => WriterOptions -> [Block] -> StateT WriterState m (Doc Text)
 bulletListItemToHaddock opts items = do
   contents <- blockListToHaddock opts items
   let sps = replicate (writerTabStop opts - 2) ' '
@@ -163,7 +163,7 @@ orderedListItemToHaddock :: PandocMonad m
                          => WriterOptions -- ^ options
                          -> String        -- ^ list item marker
                          -> [Block]       -- ^ list item (list of blocks)
-                         -> StateT WriterState m Doc
+                         -> StateT WriterState m (Doc Text)
 orderedListItemToHaddock opts marker items = do
   contents <- blockListToHaddock opts items
   let sps = case length marker - writerTabStop opts of
@@ -176,7 +176,7 @@ orderedListItemToHaddock opts marker items = do
 definitionListItemToHaddock :: PandocMonad m
                             => WriterOptions
                             -> ([Inline],[[Block]])
-                            -> StateT WriterState m Doc
+                            -> StateT WriterState m (Doc Text)
 definitionListItemToHaddock opts (label, defs) = do
   labelText <- inlineListToHaddock opts label
   defs' <- mapM (mapM (blockToHaddock opts)) defs
@@ -187,19 +187,19 @@ definitionListItemToHaddock opts (label, defs) = do
 blockListToHaddock :: PandocMonad m
                    => WriterOptions -- ^ Options
                    -> [Block]       -- ^ List of block elements
-                   -> StateT WriterState m Doc
+                   -> StateT WriterState m (Doc Text)
 blockListToHaddock opts blocks =
   cat <$> mapM (blockToHaddock opts) blocks
 
 -- | Convert list of Pandoc inline elements to haddock.
 inlineListToHaddock :: PandocMonad m
-                    => WriterOptions -> [Inline] -> StateT WriterState m Doc
+                    => WriterOptions -> [Inline] -> StateT WriterState m (Doc Text)
 inlineListToHaddock opts lst =
   cat <$> mapM (inlineToHaddock opts) lst
 
 -- | Convert Pandoc inline element to haddock.
 inlineToHaddock :: PandocMonad m
-                => WriterOptions -> Inline -> StateT WriterState m Doc
+                => WriterOptions -> Inline -> StateT WriterState m (Doc Text)
 inlineToHaddock opts (Span (ident,_,_) ils) = do
   contents <- inlineListToHaddock opts ils
   if not (null ident) && null ils

@@ -20,6 +20,7 @@ import Data.Generics (everywhere, mkT)
 import Data.List (isPrefixOf, stripPrefix)
 import Data.Monoid (Any (..))
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Text.Pandoc.Builder as B
 import Text.Pandoc.Class (PandocMonad, report)
 import Text.Pandoc.Definition
@@ -45,7 +46,7 @@ type DB = ReaderT DocBookVersion
 -- | Convert list of authors to a docbook <author> section
 authorToDocbook :: PandocMonad m => WriterOptions -> [Inline] -> DB m B.Inlines
 authorToDocbook opts name' = do
-  name <- render Nothing <$> inlinesToDocbook opts name'
+  name <- T.unpack . render Nothing <$> inlinesToDocbook opts name'
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
@@ -81,7 +82,7 @@ writeDocbook opts (Pandoc meta blocks) = do
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
-  let render' :: Doc -> Text
+  let render' :: Doc Text -> Text
       render' = render colwidth
   -- The numbering here follows LaTeX's internal numbering
   let startLvl = case writerTopLevelDivision opts of
@@ -110,7 +111,7 @@ writeDocbook opts (Pandoc meta blocks) = do
          Just tpl -> renderTemplate tpl context
 
 -- | Convert an Element to Docbook.
-elementToDocbook :: PandocMonad m => WriterOptions -> Int -> Element -> DB m Doc
+elementToDocbook :: PandocMonad m => WriterOptions -> Int -> Element -> DB m (Doc Text)
 elementToDocbook opts _   (Blk block) = blockToDocbook opts block
 elementToDocbook opts lvl (Sec _ _num (id',_,_) title elements) = do
   version <- ask
@@ -138,7 +139,7 @@ elementToDocbook opts lvl (Sec _ _num (id',_,_) title elements) = do
       inTagsSimple "title" title' $$ vcat contents
 
 -- | Convert a list of Pandoc blocks to Docbook.
-blocksToDocbook :: PandocMonad m => WriterOptions -> [Block] -> DB m Doc
+blocksToDocbook :: PandocMonad m => WriterOptions -> [Block] -> DB m (Doc Text)
 blocksToDocbook opts = fmap vcat . mapM (blockToDocbook opts)
 
 -- | Auxiliary function to convert Plain block to Para.
@@ -149,13 +150,13 @@ plainToPara x         = x
 -- | Convert a list of pairs of terms and definitions into a list of
 -- Docbook varlistentrys.
 deflistItemsToDocbook :: PandocMonad m
-                      => WriterOptions -> [([Inline],[[Block]])] -> DB m Doc
+                      => WriterOptions -> [([Inline],[[Block]])] -> DB m (Doc Text)
 deflistItemsToDocbook opts items =
   vcat <$> mapM (uncurry (deflistItemToDocbook opts)) items
 
 -- | Convert a term and a list of blocks into a Docbook varlistentry.
 deflistItemToDocbook :: PandocMonad m
-                     => WriterOptions -> [Inline] -> [[Block]] -> DB m Doc
+                     => WriterOptions -> [Inline] -> [[Block]] -> DB m (Doc Text)
 deflistItemToDocbook opts term defs = do
   term' <- inlinesToDocbook opts term
   def' <- blocksToDocbook opts $ concatMap (map plainToPara) defs
@@ -164,15 +165,15 @@ deflistItemToDocbook opts term defs = do
       inTagsIndented "listitem" def'
 
 -- | Convert a list of lists of blocks to a list of Docbook list items.
-listItemsToDocbook :: PandocMonad m => WriterOptions -> [[Block]] -> DB m Doc
+listItemsToDocbook :: PandocMonad m => WriterOptions -> [[Block]] -> DB m (Doc Text)
 listItemsToDocbook opts items = vcat <$> mapM (listItemToDocbook opts) items
 
 -- | Convert a list of blocks into a Docbook list item.
-listItemToDocbook :: PandocMonad m => WriterOptions -> [Block] -> DB m Doc
+listItemToDocbook :: PandocMonad m => WriterOptions -> [Block] -> DB m (Doc Text)
 listItemToDocbook opts item =
   inTagsIndented "listitem" <$> blocksToDocbook opts (map plainToPara item)
 
-imageToDocbook :: WriterOptions -> Attr -> String -> Doc
+imageToDocbook :: WriterOptions -> Attr -> String -> Doc Text
 imageToDocbook _ attr src = selfClosingTag "imagedata" $
   ("fileref", src) : idAndRole attr ++ dims
   where
@@ -182,7 +183,7 @@ imageToDocbook _ attr src = selfClosingTag "imagedata" $
                     Nothing -> []
 
 -- | Convert a Pandoc block element to Docbook.
-blockToDocbook :: PandocMonad m => WriterOptions -> Block -> DB m Doc
+blockToDocbook :: PandocMonad m => WriterOptions -> Block -> DB m (Doc Text)
 blockToDocbook _ Null = return empty
 -- Add ids to paragraphs in divs with ids - this is needed for
 -- pandoc-citeproc to get link anchors in bibliographies:
@@ -312,23 +313,23 @@ alignmentToString alignment = case alignment of
 tableRowToDocbook :: PandocMonad m
                   => WriterOptions
                   -> [[Block]]
-                  -> DB m Doc
+                  -> DB m (Doc Text)
 tableRowToDocbook opts cols =
   (inTagsIndented "row" . vcat) <$> mapM (tableItemToDocbook opts) cols
 
 tableItemToDocbook :: PandocMonad m
                    => WriterOptions
                    -> [Block]
-                   -> DB m Doc
+                   -> DB m (Doc Text)
 tableItemToDocbook opts item =
   (inTags True "entry" [] . vcat) <$> mapM (blockToDocbook opts) item
 
 -- | Convert a list of inline elements to Docbook.
-inlinesToDocbook :: PandocMonad m => WriterOptions -> [Inline] -> DB m Doc
+inlinesToDocbook :: PandocMonad m => WriterOptions -> [Inline] -> DB m (Doc Text)
 inlinesToDocbook opts lst = hcat <$> mapM (inlineToDocbook opts) lst
 
 -- | Convert an inline element to Docbook.
-inlineToDocbook :: PandocMonad m => WriterOptions -> Inline -> DB m Doc
+inlineToDocbook :: PandocMonad m => WriterOptions -> Inline -> DB m (Doc Text)
 inlineToDocbook _ (Str str) = return $ text $ escapeStringForXML str
 inlineToDocbook opts (Emph lst) =
   inTagsSimple "emphasis" <$> inlinesToDocbook opts lst
